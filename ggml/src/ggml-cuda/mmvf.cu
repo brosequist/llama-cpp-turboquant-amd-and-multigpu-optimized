@@ -935,7 +935,7 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0
                     if (ggml_cuda_mmvf_weight_is_narrow(cc, GGML_TYPE_F16, src0_ne[1])) {
                         return ne11 <= 8;
                     }
-                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+                    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
                         return ne11 <= 3;
                     }
                     if (GGML_CUDA_CC_IS_RDNA4(cc)) {
