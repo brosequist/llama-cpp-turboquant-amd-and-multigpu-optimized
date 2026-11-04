@@ -1697,6 +1697,20 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
 
+        # transformers 5 hashes these tokenizers differently from the table above: the deepseek ones
+        # no longer encode a BOS, and the others ignore tokenizer.json when encoding. Their vocabs and
+        # llama.cpp's pre-tokenizers are unchanged. Kept out of the generated table on purpose.
+        if chkhsh == "99ecacb482755b6abc6f96d6f278fa7f540b51d4549bcc0c5c068a60934d128c":
+            res = "deepseek-llm"
+        if chkhsh == "d08ba6530eb33df74cf7b22e4de26cf3019ad45ee2dbc0db35cd27eb7f754b28":
+            res = "deepseek-coder"
+        if chkhsh == "e9793ed6088784da85d953f67577618766c978b2b0a10239910c588015830bf9":
+            res = "gpt-4o"
+        if chkhsh == "ff56fb99e60f4978c0aacffdb54ab8cc5a808741777dbcdb17fb986823d6ff7e":
+            res = "jina-v1-en"
+        if chkhsh == "261dca7f7e13f3c2d223e219f9983a7587fb6fb33792ff438a0612c847964ff9":
+            res = "a.x-4.0"
+
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
