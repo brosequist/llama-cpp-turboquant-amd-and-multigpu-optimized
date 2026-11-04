@@ -171,6 +171,47 @@ performance-neutral: pp4096 1606 → 1611, and decode is within run-to-run noise
   26B-A4B `tg128` +13.7% (RX 9070 XT) / +13.8% (RX 9060 XT), North +15.9% (+12.0% at 16K context); prompt processing
   unchanged.
 
+## Dependency updates
+
+2026-11-03: cleared the Dependabot alerts on this branch, from 129 open (5 critical, 63 high) to 3 low. This is ahead of
+upstream, which still pins transformers 4.57.6. The live server is unaffected: it runs with `--no-webui`, and the fork's
+C++ is not something Dependabot scans. Dependabot only scans this default branch, so `deploy/*` and `exp/*` get no alerts.
+
+| Area | Versions |
+|---|---|
+| Converters | transformers 5.22.1, torch 2.14.1, torchvision 0.29.1; `pyproject.toml` now needs Python 3.11 |
+| Other Python tools | GitPython 3.2, pytest 9.0.3, Snapdragon certifi 2026.10.19, idna 3.15, urllib3 2.8.0 |
+| `tools/ui` | Storybook 10.6.5, DOMPurify 3.4.17, Vite 7.3.7, Vitest 4.1.12, Mermaid 11.17.2, MCP SDK 1.32.2 |
+| `tools/ui` overrides | sharp 0.35.5, KaTeX 0.18.2, minimatch 11.0.4, glob 14.0.3, postcss-selector-parser 6.1.5 under `@tailwindcss/typography` |
+
+**transformers 5 needs aliases.** It changes the pre-tokenizer check hash for several tokenizers, so five aliases sit just
+before `if res is None` in `conversion/base.py`, outside the generated table. Without them `deepseek-llm` and
+`deepseek-coder` fail to convert. The DeepSeek tokenizers only lose a BOS from the check text; `gpt-4o`, `jina-v1-en` and
+`a.x-4.0` are encoded differently by `AutoTokenizer` but match when loaded straight from `tokenizer.json`.
+
+Vocab-only conversion of 84 public tokenizers, compared across 4.57.6 and 5.22.1: 75 convert on 5.x, up from 71 (North
+Mini Code, both LFM2.5 models and talkie need 5.x). A tiny Qwen2 model with weights is byte-identical. What differs:
+
+- DeepSeek-V3 and JoyAI-LLM-Flash are labelled `joyai-llm`, DeepSeek-R1-Distill `qwen2`. Same pre-tokenizer behaviour in
+  `src/llama-vocab.cpp`.
+- Hunyuan-4B's EOS is 120026, not 120020: the converter's `eod_token_id` override now takes effect.
+- Solar Open gains expert-group settings of 1. Youtu changes key order only. Trinity's tokenizer-only repo loses defaults.
+
+Not tested: 14 gated or missing tokenizers (Llama, Gemma, Command R, ...), `gpt-4o` and `A.X-4.0` end to end (hash level
+only), full-size models, vision and LoRA conversion. The first real conversion is the real test.
+
+**minimatch and glob must move together.** Forcing minimatch 11 alone makes glob 11 match nothing, so the build still
+passes but the service worker's precache drops from 10 entries to 2. glob 14 is built on minimatch 11. ESLint and
+workbox-build declare older ranges, so both overrides are unsupported combinations; `tests/unit/pwa.spec.ts` catches the
+failure, and `has PWA icons` and `has favicon.ico` in that file already failed before these changes.
+
+**Still open:** `@sveltejs/kit` (2 low; needs SvelteKit 3, Vite 8 and TypeScript 6) and `deepmerge` (1 low; no fixed
+version).
+
+**At the next upstream sync:** keep the higher versions and the aliases, resolve `tools/ui/package-lock.json` to the
+higher versions, and drop any override upstream's packages make unnecessary. Before another transformers bump, compare
+tokenizer hashes across all public repos in `convert_hf_to_gguf_update.py`, not a sample: 9 of the first 10 matched.
+
 ## Environment knobs added by this fork
 
 Every behaviour change below can be turned off at run time, which is how each one was A/B'd.
