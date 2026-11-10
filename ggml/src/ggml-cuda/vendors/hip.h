@@ -82,7 +82,9 @@
 #ifndef cudaErrorInvalidValue
 #define cudaErrorInvalidValue hipErrorInvalidValue
 #endif
+#define CUresult hipError_t
 #define cudaErrorMemoryAllocation hipErrorOutOfMemory
+#define CUDA_ERROR_OUT_OF_MEMORY hipErrorOutOfMemory
 #define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
 #define cudaEventCreate hipEventCreate
