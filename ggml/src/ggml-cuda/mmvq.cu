@@ -1436,7 +1436,7 @@ void ggml_cuda_mul_mat_vec_q(
                 ne10_padded, ne11, ne12, ne13, stream);
         } else {
             quantize_row_q8_1_cuda(
-                src1_d, nullptr, src1_q8_1, src0->type, ne10, s11, s12, s13,
+                src1_d, src1_q8_1, ne10, s11, s12, s13,
                 ne10_padded, ne11, ne12, ne13, stream);
         }
     }
