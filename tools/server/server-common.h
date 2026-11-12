@@ -264,6 +264,11 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// true if the address is publicly routable
+bool server_addr_is_public(const std::string & addr);
+
+// resolve host to an address to connect to; throws if not resolvable or not public (unless allow_private)
+std::string server_resolve_public_addr(const std::string & host, bool allow_private);
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
 server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
@@ -306,6 +311,7 @@ struct server_chat_params {
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;
+    bool media_allow_private_urls = false;
     bool force_pure_content = false;
 };
 
