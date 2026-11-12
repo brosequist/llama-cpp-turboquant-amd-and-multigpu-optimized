@@ -12,6 +12,7 @@
 #include "llama.h"
 #include "log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <clocale>
 #include <exception>
@@ -305,6 +306,16 @@ int llama_server(common_params & params, int argc, char ** argv) {
         });
         return res;
     };
+
+    // tools can run shell commands: do not expose them to the network without auth
+    const bool tools_enabled = !params.server_tools.empty() || !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty() || params.ui_mcp_proxy;
+    const std::string & h = params.hostname;
+    const bool loopback_only = string_ends_with(h, ".sock") || h == "localhost" || h == "::1" || h == "[::1]" || string_starts_with(h, "127.");
+    if (tools_enabled && !loopback_only && params.api_keys.empty() && !params.server_tools_allow_unauth) {
+        SRV_ERR("%s", "security: server tools, MCP servers or MCP proxy are enabled on a non-loopback address without an API key\n");
+        SRV_ERR("%s", "set --api-key, bind to 127.0.0.1, or pass --allow-unauthenticated-tools on a trusted network\n");
+        return 1;
+    }
 
     if (params.cors_origins == "*" && params.api_keys.empty()) {
         SRV_WRN("%s", "-----------------\n");
