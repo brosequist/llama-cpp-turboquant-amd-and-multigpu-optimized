@@ -1590,16 +1590,23 @@ struct ggml_backend_cuda_context {
 
     static const size_t max_cuda_graphs = 64;
 
-    int64_t last_graph_eviction_sweep = 0;
+    int64_t next_graph_eviction_time = 0;
+    int64_t last_graph_use_time = 0;
 
     ggml_cuda_graph * cuda_graph(uint64_t graph_key) {
         const int64_t time_now = ggml_time_us();
 
-        // sweep every 5s, evicting cuda graphs unused for >=10s
-        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
-            last_graph_eviction_sweep = time_now;
+        // Give all cached graphs 10s to be reused after an idle period, without updating each graph.
+        if (!cuda_graphs.empty() && time_now - last_graph_use_time >= 10'000'000) {
+            next_graph_eviction_time = time_now + 10'000'000;
+        }
+        last_graph_use_time = time_now;
+
+        // Sweep every 5s during active use, evicting graphs unused for at least 10s.
+        if (time_now >= next_graph_eviction_time) {
+            next_graph_eviction_time = time_now + 5'000'000;
             for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
-                if (time_now - it->second->last_used_time >= 10'000'000) {
+                if (it->first != graph_key && time_now - it->second->last_used_time >= 10'000'000) {
                     it = cuda_graphs.erase(it);
                 } else {
                     ++it;
