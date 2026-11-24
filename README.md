@@ -1,10 +1,19 @@
 # llama.cpp (TurboQuant fork)
 
-> **brosequist fork:** TheTom's TurboQuant llama.cpp, plus fixes and tuning for a mixed-architecture dual-RDNA4 setup
+> **llama-cpp-turboquant-amd-and-multigpu-optimized** (formerly `brosequist/llama-cpp-turboquant`): TheTom's TurboQuant
+> llama.cpp, plus fixes and tuning for a mixed-architecture dual-RDNA4 setup
 > (RX 9070 XT gfx1201 + RX 9060 XT gfx1200, layer split in one process). On Qwen3.8-27B (262K context, turbo4 KV, MTP):
 > **decode ~21 → 44–57 t/s, 4K-token prefill 808 → ~1710 t/s, 64K-depth prefill 223 → 492 t/s.** North-Mini-Code
 > (MoE): fresh-code decode 58 → 89 t/s, decode at 64K context 23.8 → 43.3 t/s, code edits 57 → 140+ t/s. Each change,
 > with before/after numbers and rejected experiments: **[FORK_OPTIMIZATIONS.md](FORK_OPTIMIZATIONS.md)**.
+>
+> **This is not TheTom's branch and not a staging area for it.** It has diverged from
+> [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) `feature/turboquant-kv-cache`: it sits on
+> an older TheTom head, carries mainline llama.cpp commits TheTom has not synced, ports of unmerged mainline PRs, and
+> kernels that are only tested on gfx1201 + gfx1200 with ROCm 10.1. The list is under
+> **[Deviations from TheTom's branch](FORK_OPTIMIZATIONS.md#deviations-from-thetoms-branch)**. Work offered back to TheTom
+> is prepared on clean branches off his current head in a separate repository,
+> [brosequist/llama-cpp-turboquant-pr](https://github.com/brosequist/llama-cpp-turboquant-pr).
 >
 > **This default branch is the code in production** (currently `exp/router-mmvf`, deployed as `app-ce88c8c`); it is updated
 > after every deploy. Experiment branches are listed under "Branches" in FORK_OPTIMIZATIONS.md.
