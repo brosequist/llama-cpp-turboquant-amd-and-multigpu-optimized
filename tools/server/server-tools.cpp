@@ -1302,7 +1302,7 @@ struct server_tool_get_datetime : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string format = json_value(params, "format", std::string("%Y-%m-%dT%H:%M:%SZ"));
 
         auto now  = std::chrono::system_clock::now();

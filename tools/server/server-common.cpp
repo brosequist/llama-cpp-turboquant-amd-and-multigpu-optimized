@@ -9,6 +9,8 @@
 
 #include "server-common.h"
 
+#include <cpp-httplib/httplib.h>
+
 #include <random>
 #include <sstream>
 #include <fstream>
