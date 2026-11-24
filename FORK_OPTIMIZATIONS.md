@@ -1,4 +1,4 @@
-# Fork optimizations (brosequist/llama-cpp-turboquant)
+# Fork optimizations (brosequist/llama-cpp-turboquant-amd-and-multigpu-optimized)
 
 This fork is [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) (llama.cpp with TurboQuant KV-cache
 types), plus fixes and performance work for one specific setup: **two RDNA4 GPUs with different architectures in one
@@ -61,6 +61,36 @@ next section.
 > prose answer. Prefill numbers are `llama-bench -p 4096 -n 0 -r 3`, or the llama-server `timings` for the 9.3K
 > prompt. Where a cell says "~", the baseline came from an earlier harness on the same hardware. Each step below was
 > measured A/B in a single session.
+
+## Deviations from TheTom's branch
+
+The baseline is [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant), branch
+`feature/turboquant-kv-cache`. This repository was renamed from `llama-cpp-turboquant` on 2026-11-24 so that it is not
+mistaken for a fork that tracks that branch. As of that date it differs from the baseline in these ways:
+
+| Area | Deviation |
+|---|---|
+| Base | Built on TheTom head `643956891` (2026-10-21). TheTom has since added 65 commits (TQ3_4S weights, TQ MMQ prefill on AMD, dp4a TQ decode, RPC and Vulkan fixes) that are **not** in this branch yet. A rebase onto `f7c3638e8` is being validated on `bump/thetom-1122` |
+| Mainline llama.cpp | 21 commits cherry-picked from ggml-org/llama.cpp that TheTom's last mainline sync (2026-08-06) does not have: flash-attention fixes and the RDNA4 head-dim-256 MMA path, MMQ fixes, the batch-1 correctness and security fixes, RMS_NORM + SCALE fusion, the MoE weighted reduction |
+| Ports of mainline PRs | Hand ports, adapted to this tree: [#29953](https://github.com/ggml-org/llama.cpp/pull/29953) (MMQ padding), [#22587](https://github.com/ggml-org/llama.cpp/pull/22587) (row-per-warp GDN kernel), [#30803](https://github.com/ggml-org/llama.cpp/pull/30803) (vec flash attention on RDNA4), part of [#26705](https://github.com/ggml-org/llama.cpp/pull/26705), and [#31037](https://github.com/ggml-org/llama.cpp/pull/31037) (trimmed MTP draft head), which mainline has not merged |
+| Multi-GPU | Mixed-architecture HIP routing of float GEMMs through ggml's mmf/mmvf kernels instead of rocBLAS; one TurboQuant InnerQ scale per KV device. Offered to TheTom as [#420](https://github.com/TheTom/llama-cpp-turboquant/pull/420) |
+| RDNA4 kernels and fusions | MoE MMVQ routing for single tokens, fused MoE expert sum, gate/up + GLU fusion for 2-4 tokens, rope + SET_ROWS into a q8_0 KV cache, batched CPY, narrow CONCAT, residual ADD folded into RMS_NORM, mmvf block sizes. Each has an off switch (see "Environment knobs added by this fork"). They are tuned and tested on gfx1201 + gfx1200 only |
+| MTP | Only the last `h_nextn` row is kept for prompt batches; optional trimmed and requantized draft head |
+| Build | `.devops/rocm.Dockerfile` uses ROCm 10.1.0 (TheTom: 7.2.1); the production image is built with `ROCM_DOCKER_ARCH='gfx1200;gfx1201'` only |
+| Tooling | Converter and Python dependencies moved to transformers 5; web UI dependency updates (see "Dependency updates") |
+| CI | GitHub Actions are disabled here. Nothing in this branch has been compiled or tested on NVIDIA, Metal or Vulkan; TheTom's CI and test gates do not run on it |
+
+Known limits, raised in the review of #420, that apply to this branch as well:
+
+- The mixed-arch routing covers float `src0` only. The TQ4_1S cuBLAS prefill, the quantized types MMQ declines and the
+  `MUL_MAT_ID` cuBLAS fallback can still reach rocBLAS on a mixed-arch box.
+- An MTP draft cache that shares layers with the target reads the target's InnerQ scale. With `TURBO_INNERQ` unset the
+  scale is all ones, so output is unchanged.
+- With partial offload (`-ngl` below the layer count) a single-GPU run holds two InnerQ scale copies, one on CPU and one
+  on the GPU.
+- On this branch `GGML_CUDA_NO_MIXED_ARCH_WORKAROUND`, `GGML_CUDA_GDN_LEGACY` and `LLAMA_MTP_PROF` are read by presence,
+  so setting one of them to `0` still turns it on. `bump/thetom-1122` parses the value, and lists every knob of this
+  fork in the env tables of `AGENTS.md` and `docs/KV-cache-quantization.md`; that arrives here with the next deploy.
 
 ## Optimizations, in the order they landed
 
@@ -166,6 +196,12 @@ performance-neutral: pp4096 1606 → 1611, and decode is within run-to-run noise
 
   None of the three changes behaviour on this setup: the build is HIP, North's rope covers all 128 head dims, and the
   profiling knob is off by default.
+- **#410 was split into three PRs** at TheTom's request. The first,
+  **[TheTom/llama-cpp-turboquant#420](https://github.com/TheTom/llama-cpp-turboquant/pull/420)** (multi-GPU: mixed-arch
+  routing and per-device InnerQ scale), was reviewed on 2026-11-22; the review items were addressed and the branch rebased
+  onto `f7c3638e8` on 2026-11-24 (pp4096 767 -> 1563 t/s against that head). The MoE/mmv kernels and the GDN fusions
+  follow as the second and third PR once #420 is merged. The PR branches live in
+  [brosequist/llama-cpp-turboquant-pr](https://github.com/brosequist/llama-cpp-turboquant-pr).
 - **ggml-org/llama.cpp**: the single-token MoE MMVQ routing (`GGML_CUDA_MMVQ_MOE_N1`) ports to mainline as a one-line
   dispatch change in `mmvq.cu`, since mainline's MoE kernel already handles every fused form. On mainline: Gemma 4
   26B-A4B `tg128` +13.7% (RX 9070 XT) / +13.8% (RX 9060 XT), North +15.9% (+12.0% at 16K context); prompt processing
