@@ -958,10 +958,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
         return use;
     };
 
-    // fork: single-token MUL_MAT_ID on RDNA4 also uses the dedicated MoE kernel (one warp per 2 rows
-    // per expert slot). The generic kernel runs 8 warps per row there, which leaves most lanes idle on
-    // short expert rows (north-mini-code, 128x top-8, K = 768/2048: navi48 Q5_K down 146 -> 86 us,
-    // decode 58 -> 73 t/s). GGML_CUDA_MMVQ_MOE_N1=0 disables.
+    // single-token MUL_MAT_ID on RDNA4 also uses the dedicated MoE kernel (one warp per 2 rows per
+    // expert slot). The generic kernel runs 8 warps per row there, which leaves most lanes idle on
+    // short expert rows. GGML_CUDA_MMVQ_MOE_N1=0 disables.
     static const bool moe_n1 = [] {
         const char * e = getenv("GGML_CUDA_MMVQ_MOE_N1");
         return e == nullptr || atoi(e) != 0;

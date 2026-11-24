@@ -113,6 +113,19 @@ disagree, the code wins and both need fixing in the same PR.
 | `GGML_CUDA_FUSE_CHAIN`          | unset   | CUDA: `0` disables elementwise chain fusion, so ADD/MUL/DIV/SCALE/CLAMP/SQR and the SILU/SIGMOID/SOFTPLUS/GELU/RELU/NEG unaries run as separate kernels |
 | `GGML_CUDA_Q8CACHE`             | unset   | CUDA: `0` disables the per-graph shared `q8_1` activation cache in `mmvq`, so a repeated activation is quantized again per use |
 | `GGML_CUDA_NO_MIXED_ARCH_WORKAROUND` | unset | HIP: a non-zero value turns off the mixed-arch float GEMM routing, so on a multi-GPU box whose devices differ in architecture (for example gfx1201 + gfx1200) float GEMMs go back to rocBLAS instead of ggml's own mmf/mmvf kernels. For testing a ROCm that has ROCm/rocm-libraries#4781. No effect on CUDA builds or when all devices share one architecture |
+| `GGML_CUDA_MMVQ_MOE_N1` | unset | CUDA, RDNA4 only: `0` sends single-token `MUL_MAT_ID` back to the generic mmvq kernel instead of the MoE MMVQ kernel |
+| `GGML_CUDA_MOE_WEIGHTED_REDUCTION` | unset | CUDA: `0` disables the fused MoE weighted expert sum, including the single-token MUL -> PERMUTE -> CONT -> SUM_ROWS form |
+| `GGML_CUDA_MOE_WR_ADDS` | unset | CUDA: `0` keeps residual ADDs out of the MoE weighted reduction |
+| `GGML_CUDA_MMVQ_FUSE_NCOLS` | unset | CUDA, RDNA4 only: `0` limits the dense gate/up + GLU fusion in mmvq to single-token batches (2-4 tokens are fused otherwise) |
+| `GGML_CUDA_BATCHED_CPY` | unset | CUDA: `0` runs consecutive same-layout f32 CPYs as separate launches |
+| `GGML_CUDA_ADD_RMS_NORM` | unset | CUDA: `0` runs the residual ADD as its own kernel before RMS_NORM + MUL |
+| `GGML_CUDA_ROPE_Q8_FUSE` | unset | CUDA: `0` runs the K rope separately from the q8_0 KV cache write |
+| `GGML_CUDA_MMVF_SMALL_BS` | unset | CUDA, RDNA4 only: `0` keeps the default mmvf block size for 65-128-row GEMVs |
+| `GGML_CUDA_MMVF_UNROLL` | unset | CUDA: `0` turns off the unrolled f32 loads in the mmvf inner loop |
+| `GGML_CUDA_GDN_LEGACY` | unset | CUDA: a non-zero value uses the column-per-thread GATED_DELTA_NET kernel instead of the row-per-warp one |
+| `LLAMA_MTP_DRAFT_VOCAB` | unset | MTP draft: keep only the first N rows of the draft output head, so the draft proposes token ids below N; the target still verifies every token |
+| `LLAMA_MTP_DRAFT_TYPE` | unset | MTP draft: requantize the kept output-head rows to this type (for example `q4_K`); only read when `LLAMA_MTP_DRAFT_VOCAB` trims the head |
+| `LLAMA_MTP_PROF` | unset | MTP draft: a non-zero value logs target decode and draft time per batch; adds stream syncs, for measurements only |
 | `GGML_TQ_DP4A`                  | unset   | CUDA: TQ decode kernel override for measurements: unset = per architecture (dp4a on NVIDIA, CDNA, RDNA2, RDNA3.0), `1`/`0` force dp4a/scalar. TQ3_1S ignores it on non-HIP builds |
 | `LLAMA_ATTN_ROT_K_OVERRIDE` / `LLAMA_ATTN_ROT_V_OVERRIDE` | off | Enable upstream #21038 attention rotation for K / V; needs a quantized type and a head dim that is a multiple of 64 |
 | `LLAMA_ATTN_ROT_K_NROT`         | `64`    | Rotation tile size for the optional upstream K path (`0` = upstream's largest power-of-two divisor of the head dim) |

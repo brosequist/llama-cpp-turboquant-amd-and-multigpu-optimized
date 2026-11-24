@@ -496,7 +496,7 @@ static void launch_gated_delta_net(
     const uint3 neqk1_magic = init_fastdiv_values(neqk1);
     const uint3 rq3_magic   = init_fastdiv_values(rq3);
 
-    static const bool gdn_legacy = getenv("GGML_CUDA_GDN_LEGACY") != nullptr;
+    static const bool gdn_legacy = getenv("GGML_CUDA_GDN_LEGACY") != nullptr && atoi(getenv("GGML_CUDA_GDN_LEGACY")) != 0;
     if (!gdn_legacy && S_v % GDN_ROWS_BLOCK_DV == 0) {
         const dim3 rows_grid(H, n_seqs, (S_v + GDN_ROWS_BLOCK_DV - 1) / GDN_ROWS_BLOCK_DV);
         const dim3 rows_block(warp_size, GDN_ROWS_NUM_WARPS, 1);

@@ -452,10 +452,8 @@ void launch_mul_mat_vec_f_cuda(
     int64_t block_size_best = warp_size;
     int64_t niter_best      = (ncols + 2*warp_size - 1) / (2*warp_size);
     int64_t max_block_size  = 256;
-    // 65-128 rows (e.g. a 128-expert MoE router): cap blocks at 128 threads on RDNA4. With 256-thread blocks the f32
-    // 128 x 2048 GEMV ran at 13.2 us on gfx1200 vs 3.1 us with 128 (gfx1201: 2.05 vs 2.0). Smaller grids need the
-    // wider blocks for parallelism (Qwen3.8's 48-row ssm_alpha/beta lost 8% decode with the cap); larger ones are
-    // unaffected. GGML_CUDA_MMVF_SMALL_BS=0 disables.
+    // 65-128 rows (e.g. a 128-expert MoE router): cap blocks at 128 threads on RDNA4, where 256-thread blocks hit a
+    // slow mode on gfx1200. Smaller grids need the wider blocks for parallelism. GGML_CUDA_MMVF_SMALL_BS=0 disables.
     static const bool small_bs = [] {
         const char * e = getenv("GGML_CUDA_MMVF_SMALL_BS");
         return e == nullptr || atoi(e) != 0;
