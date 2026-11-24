@@ -15,7 +15,7 @@
 > is prepared on clean branches off his current head in a separate repository,
 > [brosequist/llama-cpp-turboquant-pr](https://github.com/brosequist/llama-cpp-turboquant-pr).
 >
-> **This default branch is the code in production** (currently `exp/router-mmvf`, deployed as `app-ce88c8c`); it is updated
+> **This default branch is the code in production** (currently `bump/thetom-1122`, deployed 2026-11-24 as `app-20bf121`); it is updated
 > after every deploy. Experiment branches are listed under "Branches" in FORK_OPTIMIZATIONS.md.
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
