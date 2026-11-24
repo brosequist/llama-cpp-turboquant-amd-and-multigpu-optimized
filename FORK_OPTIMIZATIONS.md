@@ -70,15 +70,15 @@ mistaken for a fork that tracks that branch. As of that date it differs from the
 
 | Area | Deviation |
 |---|---|
-| Base | Built on TheTom head `643956891` (2026-10-21). TheTom has since added 65 commits (TQ3_4S weights, TQ MMQ prefill on AMD, dp4a TQ decode, RPC and Vulkan fixes) that are **not** in this branch yet. A rebase onto `f7c3638e8` is being validated on `bump/thetom-1122` |
-| Mainline llama.cpp | 21 commits cherry-picked from ggml-org/llama.cpp that TheTom's last mainline sync (2026-08-06) does not have: flash-attention fixes and the RDNA4 head-dim-256 MMA path, MMQ fixes, the batch-1 correctness and security fixes, RMS_NORM + SCALE fusion, the MoE weighted reduction |
+| Base | Rebased onto TheTom head `f7c3638e8` (2026-11-22) on 2026-11-24; nothing of TheTom's is missing as of that date |
+| Mainline llama.cpp | 73 commits cherry-picked from ggml-org/llama.cpp that TheTom's last mainline sync (2026-08-06) does not have, and 3 more ported by hand. The first 21: flash-attention fixes and the RDNA4 head-dim-256 MMA path, MMQ fixes, the batch-1 correctness and security fixes, RMS_NORM + SCALE fusion, the MoE weighted reduction. Added 2026-11-24 from mainline up to `dbaf582af`: MoE NaN and empty-tile fixes, CUDA graph eviction, sticky NaN in recurrent state, on-device state copy sizes, 64-bit `mul_mat_q` offsets, fixes and tuning for NVIDIA (Maxwell, Pascal, Volta, SM103) and other AMD generations (RDNA1, RDNA3.5, RDNA4_M, VEGA20, CDNA3), and the server security fixes [#32098](https://github.com/ggml-org/llama.cpp/pull/32098), [#32113](https://github.com/ggml-org/llama.cpp/pull/32113) and [#32115](https://github.com/ggml-org/llama.cpp/pull/32115). The rest of mainline since 2026-08-06 is **not** here: most of it changes code this tree does not have, and a full merge conflicts in about 180 files |
 | Ports of mainline PRs | Hand ports, adapted to this tree: [#29953](https://github.com/ggml-org/llama.cpp/pull/29953) (MMQ padding), [#22587](https://github.com/ggml-org/llama.cpp/pull/22587) (row-per-warp GDN kernel), [#30803](https://github.com/ggml-org/llama.cpp/pull/30803) (vec flash attention on RDNA4), part of [#26705](https://github.com/ggml-org/llama.cpp/pull/26705), and [#31037](https://github.com/ggml-org/llama.cpp/pull/31037) (trimmed MTP draft head), which mainline has not merged |
 | Multi-GPU | Mixed-architecture HIP routing of float GEMMs through ggml's mmf/mmvf kernels instead of rocBLAS; one TurboQuant InnerQ scale per KV device. Offered to TheTom as [#420](https://github.com/TheTom/llama-cpp-turboquant/pull/420) |
 | RDNA4 kernels and fusions | MoE MMVQ routing for single tokens, fused MoE expert sum, gate/up + GLU fusion for 2-4 tokens, rope + SET_ROWS into a q8_0 KV cache, batched CPY, narrow CONCAT, residual ADD folded into RMS_NORM, mmvf block sizes. Each has an off switch (see "Environment knobs added by this fork"). They are tuned and tested on gfx1201 + gfx1200 only |
 | MTP | Only the last `h_nextn` row is kept for prompt batches; optional trimmed and requantized draft head |
 | Build | `.devops/rocm.Dockerfile` uses ROCm 10.1.0 (TheTom: 7.2.1); the production image is built with `ROCM_DOCKER_ARCH='gfx1200;gfx1201'` only |
 | Tooling | Converter and Python dependencies moved to transformers 5; web UI dependency updates (see "Dependency updates") |
-| CI | GitHub Actions are disabled here. Nothing in this branch has been compiled or tested on NVIDIA, Metal or Vulkan; TheTom's CI and test gates do not run on it |
+| CI | GitHub Actions are disabled here. The branch is tested on gfx1201 + gfx1200 (ROCm 10.1) only. The NVIDIA CUDA build (12.8.1) compiles, but nothing has been run on an NVIDIA card, and Metal and Vulkan are not built; TheTom's CI and test gates do not run on it |
 
 Known limits, raised in the review of #420, that apply to this branch as well:
 
@@ -88,9 +88,11 @@ Known limits, raised in the review of #420, that apply to this branch as well:
   scale is all ones, so output is unchanged.
 - With partial offload (`-ngl` below the layer count) a single-GPU run holds two InnerQ scale copies, one on CPU and one
   on the GPU.
-- On this branch `GGML_CUDA_NO_MIXED_ARCH_WORKAROUND`, `GGML_CUDA_GDN_LEGACY` and `LLAMA_MTP_PROF` are read by presence,
-  so setting one of them to `0` still turns it on. `bump/thetom-1122` parses the value, and lists every knob of this
-  fork in the env tables of `AGENTS.md` and `docs/KV-cache-quantization.md`; that arrives here with the next deploy.
+- Server behaviour inherited from the mainline security fixes: http(s) media URLs (`image_url` and similar) that resolve to
+  a private or local address are refused unless `--media-allow-private-urls` is given, and `--tools`, MCP servers or the
+  MCP proxy on a non-loopback address without an API key need `--allow-unauthenticated-tools`.
+- The vendored cpp-httplib is older than mainline's, so the SSRF fix pins the checked address with
+  `set_hostname_addr_map`. The 8.9 GB `mul_mat_q` offset test case of mainline #32374 is left out of `test-backend-ops`.
 
 ## Optimizations, in the order they landed
 

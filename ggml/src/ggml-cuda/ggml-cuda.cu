@@ -580,6 +580,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
     CUdeviceptr pool_addr = 0;
     size_t pool_used = 0;
     size_t pool_size = 0;
+    size_t max_size = CUDA_POOL_VMM_MAX_SIZE;
     size_t granularity;
 #if defined(GGML_USE_HIP)
     std::vector<std::pair<CUdeviceptr, size_t>> mappings;
@@ -601,7 +602,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 #else
             CU_CHECK(cuMemUnmap(pool_addr, pool_size));
 #endif
-            CU_CHECK(cuMemAddressFree(pool_addr, CUDA_POOL_VMM_MAX_SIZE));
+            CU_CHECK(cuMemAddressFree(pool_addr, max_size));
         }
     }
 
@@ -617,7 +618,21 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             size_t reserve_size = size - avail;
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
-            GGML_ASSERT(pool_size + reserve_size <= CUDA_POOL_VMM_MAX_SIZE);
+            // reserve virtual address space (if not already reserved)
+            if (pool_addr == 0) {
+                CUresult err = cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0);
+                while (err == CUDA_ERROR_OUT_OF_MEMORY && (max_size >> 1) >= reserve_size && (max_size >> 1) >= granularity) {
+                    max_size >>= 1;
+                    err = cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0);
+                }
+                CU_CHECK(err);
+                if (max_size < CUDA_POOL_VMM_MAX_SIZE) {
+                    GGML_LOG_WARN(GGML_CUDA_NAME " pool[%d]: reserved %.2f GiB of virtual memory instead of %.2f GiB\n",
+                                  device, max_size / (1024.0 * 1024.0 * 1024.0), CUDA_POOL_VMM_MAX_SIZE / (1024.0 * 1024.0 * 1024.0));
+                }
+            }
+
+            GGML_ASSERT(pool_size + reserve_size <= max_size);
 
             // allocate more physical memory
             CUmemAllocationProp prop = {};
@@ -642,11 +657,6 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                 create_result = cuMemCreate(&handle, reserve_size, &prop, 0);
             }
             CU_CHECK(create_result);
-
-            // reserve virtual address space (if not already reserved)
-            if (pool_addr == 0) {
-                CU_CHECK(cuMemAddressReserve(&pool_addr, CUDA_POOL_VMM_MAX_SIZE, 0, 0, 0));
-            }
 
             // map at the end of the pool
             CUdeviceptr start_ptr = (CUdeviceptr)((char *)(pool_addr) + pool_size);
@@ -1065,7 +1075,8 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size_for_device(
     int64_t ne0 = tensor->ne[0];
 
     // TQ4_1S → q8_0 load-time conversion: allocate q8_0-sized space if opted in
-    if (ggml_tq_convert_q8() && tensor->type == GGML_TYPE_TQ4_1S) {
+    const bool tq4_1s_converted = ggml_tq_convert_q8() && tensor->type == GGML_TYPE_TQ4_1S;
+    if (tq4_1s_converted) {
         // q8_0 block: 34 bytes per 32 elements. TQ4_1S block: 20 bytes per 32 elements.
         const int64_t n_blocks = ggml_nelements(tensor) / QK_TQ4_1S;
         size = n_blocks * sizeof(block_q8_0);
@@ -1074,7 +1085,9 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size_for_device(
     if (ggml_is_quantized(tensor->type)) {
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
-            size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+            // a converted tensor holds q8_0 rows, so the padding must be q8_0 too
+            size += ggml_row_size(tq4_1s_converted ? GGML_TYPE_Q8_0 : tensor->type,
+                                  MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
     }
 
@@ -2542,7 +2555,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     if (compute_type == GGML_TYPE_F16) {
         prefer_f32_output = cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
     } else if (compute_type == GGML_TYPE_BF16) {
-        prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
+        prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_RDNA4_M(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
     }
 
     if (prefer_f32_output) {
@@ -2833,7 +2846,8 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor, bool
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    const bool is_tq_weight = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S);
+    const bool is_tq_weight = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S ||
+                               src0->type == GGML_TYPE_TQ3_4S);
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight &&
                              src0->type != GGML_TYPE_Q8_CR &&
                              src0->type != GGML_TYPE_Q5_CR &&
@@ -2843,7 +2857,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor, bool
 
     // fusion is not universally faster on Pascal
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (cc <= GGML_CUDA_CC_PASCAL) {
+    if (cc < GGML_CUDA_CC_VOLTA) {
         return false;
     }
     //we only support fusion for ncols_dst = 1, except gate-only fusion on RDNA4 up to 4 columns
@@ -2861,15 +2875,19 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor, bool
     return use_mul_mat_vec_q;
 }
 
-// GGML_TQ_MMQ gates the native TQ MMQ prefill path. Read it once: getenv() is short-circuited
-// away on NVIDIA but is a libc call per mul_mat node on the AMD path.
-static bool ggml_cuda_tq_mmq_enabled() {
-    static const bool enabled = getenv("GGML_TQ_MMQ") != nullptr;
-    return enabled;
+// GGML_TQ_MMQ: unset = native TQ MMQ prefill for TQ3_1S only, 0 = off, any other value = on for
+// every TQ type with a config. Read once: it is a libc call per mul_mat node otherwise.
+static int ggml_cuda_tq_mmq_env() {
+    static const int env = [] {
+        const char * e = getenv("GGML_TQ_MMQ");
+        return e == nullptr ? -1 : strcmp(e, "0") == 0 ? 0 : 1;
+    }();
+    return env;
 }
 
 static bool ggml_cuda_tq_mmq_supported(const ggml_tensor * src0, const int cc) {
-    if (!ggml_cuda_tq_mmq_enabled()) {
+    const int env = ggml_cuda_tq_mmq_env();
+    if (env == 0 || (env == -1 && src0->type != GGML_TYPE_TQ3_1S)) {
         return false;
     }
 
@@ -2885,9 +2903,10 @@ static bool ggml_cuda_tq_mmq_supported(const ggml_tensor * src0, const int cc) {
 // GEMMs onto ggml's own per-arch mmf kernel instead of cuBLAS.
 static bool ggml_cuda_mixed_gpu_archs() {
     static const bool mixed = [] {
-        // Escape hatch to test whether the ROCm in use still needs the workaround
-        // (rocBLAS "solution library per gfx", ROCm/rocm-libraries#4781, ROCm >= 7.12).
-        if (getenv("GGML_CUDA_NO_MIXED_ARCH_WORKAROUND") != nullptr) {
+        // a non-zero value sends float GEMMs back to rocBLAS, to test a ROCm that has
+        // ROCm/rocm-libraries#4781
+        const char * no_workaround = getenv("GGML_CUDA_NO_MIXED_ARCH_WORKAROUND");
+        if (no_workaround != nullptr && std::atoi(no_workaround) != 0) {
             return false;
         }
         const ggml_cuda_device_info & info = ggml_cuda_info();
@@ -2922,11 +2941,6 @@ static void ggml_cuda_mul_mat_f_chunked(ggml_backend_cuda_context & ctx,
 
 // The mixed-arch chunked-mmf workaround applies only to a 2D float GEMM whose src0 meets
 // mmf's structural preconditions (checked with a representative 16-column batch).
-// NB: the original patch guarded this with `!split` at the call site. Upstream has since
-// removed CUDA split *buffer types* altogether -- ggml_backend_buft_is_cuda_split no longer
-// exists, and only default_tensor_split (a VRAM proportion, unrelated) remains -- so there is
-// no split buffer path left to exclude. Upstream dropped their own `!split` guard here for
-// the same reason.
 static bool ggml_cuda_can_chunk_mmf(ggml_backend_cuda_context & ctx,
         const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
     if (!ggml_cuda_mixed_gpu_archs()) {
@@ -2954,8 +2968,7 @@ static void ggml_cuda_mul_mat_vec_f_chunked(ggml_backend_cuda_context & ctx,
         const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     // One launch instead of ncols/MMVF_MAX_BATCH_SIZE: view the full column blocks of src1/dst
     // as channels of MMVF_MAX_BATCH_SIZE columns each and let mmvf broadcast the single src0
-    // channel over them (channel_x = channel_dst / channel_ratio). Prefill on a mixed-arch
-    // qwen3.8 split used to issue ~98k 8-column launches per 4K prompt (~8% of GPU time).
+    // channel over them (channel_x = channel_dst / channel_ratio).
     const int64_t ncols   = src1->ne[1];
     const int64_t nfull   = ncols / MMVF_MAX_BATCH_SIZE;
     const int64_t c_tail  = nfull * MMVF_MAX_BATCH_SIZE;
@@ -3168,7 +3181,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
 
     // TQ weight types use the fused dp4a path (decode) or runtime q8_0 conversion + cuBLAS (prefill),
     // never mmvq/mmq (mmvq's type switch has no TQ cases and aborts).
-    const bool is_tq_weight = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S);
+    const bool is_tq_weight = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S ||
+                               src0->type == GGML_TYPE_TQ3_4S);
     if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11) && !is_tq_weight) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
@@ -3184,7 +3198,14 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // The fused TQ kernels index src1/dst as flat contiguous buffers (no nb[] stride handling in
     // mmvq-tq.cu), so permuted/viewed activations (e.g. DeepSeek-V4 MLA projections) must take the
     // stride-aware cuBLAS fallback below, which dequantizes TQ via ggml_get_to_fp16_cuda.
-    const bool tq_fast_path_ok = ggml_is_contiguous(src1) && ggml_is_contiguous(dst);
+    // They also treat src1 as one [K, N] matrix. For contiguous src1 and dst against a 2D weight
+    // that is exact with N = ne11*ne12*ne13, so the column count below folds the batch dims in: a
+    // hybrid model's GDN output projection takes [K, n_seq_tokens, n_seqs], and with several
+    // sequences in a ubatch only the first sequence's columns used to be computed. A batched
+    // (3D/4D) weight is not one matrix, so it takes the cuBLAS fallback.
+    const bool    tq_fast_path_ok = ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+                                    src0->ne[2] == 1 && src0->ne[3] == 1;
+    const int64_t tq_ncols        = ggml_nrows(src1);
 
     // GGML_TYPE_TQ3_1S: the fused warp-scalar kernel (mul_mat_tq3_1s_multi /
     // tq_prerotate_activation in mmvq-tq.cu) is disabled here pending a fix.
@@ -3216,23 +3237,27 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // Toggleable for the perplexity A/B: fused-on by default on gfx1100,
     // TQ3_FUSE_OFF=1 forces the verified dequant+hipBLAS path.
     static const bool tq3_fuse_off = (getenv("TQ3_FUSE_OFF") != nullptr);
-    const bool tq3_1s_fused_disabled = (src0->type == GGML_TYPE_TQ3_1S) && tq3_fuse_off;
+    const bool tq3_1s_fused_disabled = (src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S) && tq3_fuse_off;
 #else
-    const bool tq3_1s_fused_disabled = (src0->type == GGML_TYPE_TQ3_1S);
+    const bool tq3_1s_fused_disabled = (src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S);
 #endif
 
-    if (is_tq_weight && tq_fast_path_ok && !tq3_1s_fused_disabled && ne11 <= MMVQ_MAX_BATCH_SIZE) {
+    if (is_tq_weight && tq_fast_path_ok && !tq3_1s_fused_disabled && tq_ncols <= MMVQ_MAX_BATCH_SIZE) {
         // Fused TQ weight mul_mat with pre-rotated activations via warp shuffle WHT
         // Handles ne[1]=1 (decode) and ne[1]≤8 (multi-token / speculative decoding)
         ggml_cuda_mul_mat_tq(ctx, src0, src1, dst);
         return;
     }
-    if (is_tq_weight && tq_fast_path_ok && src0->type == GGML_TYPE_TQ4_1S
+    if (is_tq_weight && tq_fast_path_ok
             && (amd_mfma_available(cc) || amd_wmma_available(cc) || GGML_CUDA_CC_IS_RDNA2(cc))
             && ggml_cuda_tq_mmq_supported(src0, cc)) {
-        // Phase 2 (gfx90a): native MFMA-i8 MMQ prefill via activation pre-rotation.
-        // A/B against the cuBLAS path below (unset GGML_TQ_MMQ to fall back).
-        ggml_cuda_mul_mat_tq4_1s_mmq(ctx, src0, src1, dst);
+        // Phase 2: native int8 MMQ prefill via activation pre-rotation.
+        // GGML_TQ_MMQ=0 falls back to the cuBLAS path below.
+        if (src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S) {
+            ggml_cuda_mul_mat_tq3_1s_mmq(ctx, src0, src1, dst);
+        } else {
+            ggml_cuda_mul_mat_tq4_1s_mmq(ctx, src0, src1, dst);
+        }
         return;
     }
     if (is_tq_weight && tq_fast_path_ok && src0->type == GGML_TYPE_TQ4_1S) {
@@ -3276,7 +3301,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     // TQ weights: small batch uses the capture-safe device-routed matvec (ggml_cuda_mul_mat_id_tq);
     // large batch falls through to the dequant-to-f16 cuBLAS path, which synchronizes the stream.
-    const bool is_tq_weight_id = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S);
+    const bool is_tq_weight_id = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S ||
+                                  src0->type == GGML_TYPE_TQ3_4S);
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
@@ -3309,10 +3335,16 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         // only when ne2 > MMVQ_MAX_BATCH_SIZE (the small-batch TQ path above returns for decode).
         // Pre-rotates the activation once, then runs MMQ_ID with the TQ4_1S int8-centroid load_tiles,
         // avoiding the 2x-slower dequant-to-f16 cuBLAS fallback so native (GGML_TQ_NATIVE) experts
-        // keep their ~1.7x-smaller 5bpw footprint without a prefill penalty. Env-gated by GGML_TQ_MMQ.
-        if (is_tq_weight_id && src0->type == GGML_TYPE_TQ4_1S && (amd_mfma_available(cc) || amd_wmma_available(cc) || GGML_CUDA_CC_IS_RDNA2(cc))
+        // keep their ~1.7x-smaller 5bpw footprint without a prefill penalty. See ggml_cuda_tq_mmq_env.
+        if (is_tq_weight_id && (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S ||
+                                src0->type == GGML_TYPE_TQ3_4S)
+                && (amd_mfma_available(cc) || amd_wmma_available(cc) || GGML_CUDA_CC_IS_RDNA2(cc))
                 && ggml_is_contiguous(src1) && ggml_cuda_tq_mmq_supported(src0, cc)) {
-            ggml_cuda_mul_mat_id_tq4_1s_mmq(ctx, src0, src1, ids, dst);
+            if (src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S) {
+                ggml_cuda_mul_mat_id_tq3_1s_mmq(ctx, src0, src1, ids, dst);
+            } else {
+                ggml_cuda_mul_mat_id_tq4_1s_mmq(ctx, src0, src1, ids, dst);
+            }
             return;
         }
 
@@ -4072,7 +4104,8 @@ bool ggml_backend_cuda_graph_reset(ggml_backend_t backend) {
     CUDA_CHECK(cudaDeviceSynchronize());
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cuda_graphs.clear();
-    cuda_ctx->last_graph_eviction_sweep = 0;
+    cuda_ctx->next_graph_eviction_time = 0;
+    cuda_ctx->last_graph_use_time = 0;
 #endif
     cuda_ctx->stream_context().reset();
     return true;
@@ -4131,8 +4164,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         }
 
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-        const bool is_tq_w = (node->src[0]->type == GGML_TYPE_TQ4_1S || node->src[0]->type == GGML_TYPE_TQ3_1S);
         if (node->op == GGML_OP_MUL_MAT_ID) {
+            // read src[0] only here: source-less nodes (ARANGE, ...) have src[0] == NULL
+            const bool is_tq_w = (node->src[0]->type == GGML_TYPE_TQ4_1S || node->src[0]->type == GGML_TYPE_TQ3_1S ||
+                                  node->src[0]->type == GGML_TYPE_TQ3_4S);
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
             const int mmvq_mmid_max = get_mmvq_mmid_max_batch(node->src[0]->type, cc);
             // The mul_mat_id operation synchronizes the stream (forbidding graph capture) unless it
@@ -7115,7 +7150,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             // addresses experts through a table and so can be pointed at either place, and only
             // when explicitly opted in.
             if (op->op == GGML_OP_MUL_MAT_ID && i == 0 &&
-                (src->type == GGML_TYPE_TQ3_1S || src->type == GGML_TYPE_TQ4_1S) &&
+                (src->type == GGML_TYPE_TQ3_1S || src->type == GGML_TYPE_TQ4_1S || src->type == GGML_TYPE_TQ3_4S) &&
                 ggml_cuda_moe_host_experts_enabled()) {
                 continue;
             }
@@ -7253,6 +7288,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
                     case GGML_TYPE_TQ4_1S:
+                    case GGML_TYPE_TQ3_4S:
                     case GGML_TYPE_TQ3_1S:
                         return true;
                     default:
@@ -7289,6 +7325,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ1_M:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_TQ4_1S:
+                    case GGML_TYPE_TQ3_4S:
                     case GGML_TYPE_TQ3_1S:
                         return true;
                     case GGML_TYPE_IQ4_NL:
@@ -7581,7 +7618,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #ifdef GGML_USE_MUSA
             return false;
 #else
-            return true;
+            return ggml_are_same_stride(op->src[0], op->src[1]);
 #endif // GGML_USE_MUSA
         case GGML_OP_DSV4_HC_COMB:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&

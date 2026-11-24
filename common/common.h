@@ -686,6 +686,7 @@ struct common_params {
 
     // enable built-in tools
     std::vector<std::string> server_tools;
+    bool server_tools_allow_unauth = false; // allow tools/MCP on a non-loopback address without API key
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
@@ -702,6 +703,7 @@ struct common_params {
 
     std::string slot_save_path;
     std::string media_path; // path to directory for loading media files
+    bool media_allow_private_urls = false; // allow http(s) media URLs on local or private addresses
 
     float   slot_prompt_similarity        = 0.1f;
     float   slot_cache_key_similarity     = 0.5f;
@@ -1102,8 +1104,9 @@ struct common_control_vector_load_info {
 };
 
 // Load control vectors, scale each by strength, and add them together.
+// Direction layer indices must be in [1, n_layer].
 // On error, returns {-1, empty}
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer);
 
 //
 // Split utils

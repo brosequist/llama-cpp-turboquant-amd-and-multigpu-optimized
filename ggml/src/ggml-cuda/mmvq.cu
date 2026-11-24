@@ -69,6 +69,7 @@ enum mmvq_parameter_table_id {
     MMVQ_PARAMETERS_GENERIC = 0,
     MMVQ_PARAMETERS_TURING,
     MMVQ_PARAMETERS_GCN,
+    MMVQ_PARAMETERS_RDNA1,
     MMVQ_PARAMETERS_RDNA2,
     MMVQ_PARAMETERS_RDNA3_0,
     MMVQ_PARAMETERS_RDNA4
@@ -79,7 +80,9 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
     return MMVQ_PARAMETERS_RDNA4;
 #elif defined(RDNA3_0)
     return MMVQ_PARAMETERS_RDNA3_0;
-#elif defined(RDNA2) || defined(RDNA3_5)
+#elif defined(RDNA1)
+    return MMVQ_PARAMETERS_RDNA1;
+#elif defined(RDNA2) || defined(RDNA3_5) || defined(RDNA4_M)
     return MMVQ_PARAMETERS_RDNA2;
 #elif defined(GCN) || defined(CDNA)
     return MMVQ_PARAMETERS_GCN;
@@ -97,7 +100,10 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_RDNA3_0(cc)) {
         return MMVQ_PARAMETERS_RDNA3_0;
     }
-    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+    if (GGML_CUDA_CC_IS_RDNA1(cc)) {
+        return MMVQ_PARAMETERS_RDNA1;
+    }
+    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
         return MMVQ_PARAMETERS_RDNA2;
     }
     if (GGML_CUDA_CC_IS_GCN(cc) || GGML_CUDA_CC_IS_CDNA(cc)) {
@@ -251,6 +257,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+        cc = ggml_cuda_highest_compiled_arch(cc);
         if (cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
             return MMVQ_MAX_BATCH_SIZE;
         }
@@ -265,7 +272,7 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
         if (GGML_CUDA_CC_IS_RDNA4(cc)) {
             return get_mmvq_mmid_max_batch_rdna4(type);
         }
-        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
             return get_mmvq_mmid_max_batch_rdna3(type);
         }
         if (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA2(cc)) {
@@ -284,6 +291,18 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
     if (!ggml_is_quantized(type)) {
         return false;
+    }
+    // TQ3_4S has no kernel here: like the other TQ weight types, its decode runs in mmvq-tq.cu.
+    if (type == GGML_TYPE_TQ3_4S) {
+        return false;
+    }
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        switch (type) { // tuned on Radeon 8060S (gfx1151)
+            case GGML_TYPE_Q8_0:
+                return ne11 <= 6;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
     }
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         if (GGML_CUDA_CC_IS_CDNA1(cc)) {
@@ -328,6 +347,17 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
     }
+    // VEGA20 devices are the only devices with dense MMQ -> ggml_cuda_should_use_mmq()
+    if (cc == GGML_CUDA_CC_VEGA20) {
+        switch (type) { // tuned on MI50 (gfx906)
+            case GGML_TYPE_Q4_K:
+                return ne11 <= 7;
+            case GGML_TYPE_NVFP4:
+                return ne11 <= 6;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
     return ne11 <= MMVQ_MAX_BATCH_SIZE;
 }
 
@@ -336,7 +366,7 @@ template <ggml_type type>
 static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
 #if defined(RDNA4)
     return get_mmvq_mmid_max_batch_rdna4(type);
-#elif defined(RDNA3)
+#elif defined(RDNA3) || defined(RDNA4_M)
     return get_mmvq_mmid_max_batch_rdna3(type);
 #elif defined(RDNA2) || defined(RDNA1)
     return get_mmvq_mmid_max_batch_rdna1_rdna2(type);
@@ -429,6 +459,23 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
         }
         return 1;
     }
+    if (table_id == MMVQ_PARAMETERS_RDNA1) {
+        switch (ncols_dst) {
+            case 1:
+                return 1;
+            case 2:
+            case 3:
+            case 4:
+                return 4;
+            case 5:
+            case 6:
+            case 7:
+            case 8:
+                return 2;
+            default:
+                return 1;
+        }
+    }
     if (table_id == MMVQ_PARAMETERS_TURING) {
         if (ncols_dst == 1) {
             switch (type) {
@@ -460,7 +507,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
 }
 
 static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int table_id, bool small_k = false, int nwarps = 1) {
-    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING) {
+    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING || table_id == MMVQ_PARAMETERS_RDNA1) {
         switch (ncols_dst) {
             case 1:
                 return small_k ? nwarps : 1;
@@ -954,10 +1001,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
         return use;
     };
 
-    // fork: single-token MUL_MAT_ID on RDNA4 also uses the dedicated MoE kernel (one warp per 2 rows
-    // per expert slot). The generic kernel runs 8 warps per row there, which leaves most lanes idle on
-    // short expert rows (north-mini-code, 128x top-8, K = 768/2048: navi48 Q5_K down 146 -> 86 us,
-    // decode 58 -> 73 t/s). GGML_CUDA_MMVQ_MOE_N1=0 disables.
+    // single-token MUL_MAT_ID on RDNA4 also uses the dedicated MoE kernel (one warp per 2 rows per
+    // expert slot). The generic kernel runs 8 warps per row there, which leaves most lanes idle on
+    // short expert rows. GGML_CUDA_MMVQ_MOE_N1=0 disables.
     static const bool moe_n1 = [] {
         const char * e = getenv("GGML_CUDA_MMVQ_MOE_N1");
         return e == nullptr || atoi(e) != 0;
@@ -1380,8 +1426,11 @@ void ggml_cuda_mul_mat_vec_q(
                     qc->retired.push_back({ qc->ptr, qc->cap, qc->dev });
                 }
                 // Plain device memory, not pool memory: the pool frees strict LIFO, and this
-                // buffer is taken while transient pool allocations sit below it. CUDA graph
-                // capture runs in relaxed mode, which allows cudaMalloc during capture.
+                // buffer is taken while transient pool allocations sit below it. Growing it
+                // inside a graph capture is not portable: HIP on RDNA2 captures in ThreadLocal
+                // mode, where the malloc fails and invalidates the capture. It does not happen
+                // in practice because each graph runs once uncaptured before it is captured,
+                // which sizes the buffer first.
                 CUDA_CHECK(ggml_cuda_device_malloc((void **) &qc->ptr, q8_bytes, ctx.device));
                 qc->cap = q8_bytes;
                 qc->dev = ctx.device;
@@ -1410,7 +1459,7 @@ void ggml_cuda_mul_mat_vec_q(
                 ne10_padded, ne11, ne12, ne13, stream);
         } else {
             quantize_row_q8_1_cuda(
-                src1_d, nullptr, src1_q8_1, src0->type, ne10, s11, s12, s13,
+                src1_d, src1_q8_1, ne10, s11, s12, s13,
                 ne10_padded, ne11, ne12, ne13, stream);
         }
     }

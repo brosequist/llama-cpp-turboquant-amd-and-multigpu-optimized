@@ -78,6 +78,7 @@
 #define GGML_CUDA_CC_RDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x1030) // RX 6000, minimum for dp4a
 #define GGML_CUDA_CC_RDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x1100) // RX 7000, minimum for WMMA
 #define GGML_CUDA_CC_RDNA3_5    (GGML_CUDA_CC_OFFSET_AMD + 0x1150) // AI 370, AI Max 395 laptops.
+#define GGML_CUDA_CC_RDNA4_M    (GGML_CUDA_CC_OFFSET_AMD + 0x1170) // gfx117X
 #define GGML_CUDA_CC_RDNA4      (GGML_CUDA_CC_OFFSET_AMD + 0x1200) // RX 9000
 
 #define GGML_CUDA_CC_IS_AMD(cc)     (cc >= GGML_CUDA_CC_OFFSET_AMD)
@@ -85,8 +86,9 @@
 #define GGML_CUDA_CC_IS_RDNA1(cc)   (cc >= GGML_CUDA_CC_RDNA1 && cc < GGML_CUDA_CC_RDNA2)
 #define GGML_CUDA_CC_IS_RDNA2(cc)   (cc >= GGML_CUDA_CC_RDNA2 && cc < GGML_CUDA_CC_RDNA3)
 #define GGML_CUDA_CC_IS_RDNA3_0(cc) (cc >= GGML_CUDA_CC_RDNA3 && cc < GGML_CUDA_CC_RDNA3_5)
-#define GGML_CUDA_CC_IS_RDNA3_5(cc) (cc >= GGML_CUDA_CC_RDNA3_5 && cc < GGML_CUDA_CC_RDNA4)
+#define GGML_CUDA_CC_IS_RDNA3_5(cc) (cc >= GGML_CUDA_CC_RDNA3_5 && cc < GGML_CUDA_CC_RDNA4_M)
 #define GGML_CUDA_CC_IS_RDNA3(cc)   (GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc))
+#define GGML_CUDA_CC_IS_RDNA4_M(cc) (cc >= GGML_CUDA_CC_RDNA4_M && cc < GGML_CUDA_CC_RDNA4)
 #define GGML_CUDA_CC_IS_RDNA4(cc)   (cc >= GGML_CUDA_CC_RDNA4)
 #define GGML_CUDA_CC_IS_GCN(cc)     (cc > GGML_CUDA_CC_OFFSET_AMD && cc < GGML_CUDA_CC_CDNA1)
 #define GGML_CUDA_CC_IS_CDNA(cc)    (cc >= GGML_CUDA_CC_CDNA1 && cc < GGML_CUDA_CC_RDNA1)
@@ -272,9 +274,17 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
-#if defined(GGML_USE_HIP) && (defined(RDNA4) || defined(RDNA3))
+#if defined(GGML_USE_HIP) && (defined(RDNA4) || defined(RDNA4_M))
+#define AMD_WMMA_128B_AVAILABLE
+#endif // defined(GGML_USE_HIP) && (defined(RDNA4) || defined(RDNA4_M))
+
+#if defined(GGML_USE_HIP) && defined(RDNA3)
+#define AMD_WMMA_256B_AVAILABLE
+#endif // defined(GGML_USE_HIP) && defined(RDNA3)
+
+#if defined(AMD_WMMA_128B_AVAILABLE) || defined(AMD_WMMA_256B_AVAILABLE)
 #define AMD_WMMA_AVAILABLE
-#endif // defined(GGML_USE_HIP) && defined(RDNA4)
+#endif // defined(AMD_WMMA_128B_AVAILABLE) || defined(AMD_WMMA_256B_AVAILABLE)
 
 // The Volta instructions are in principle available on Turing or newer but they are effectively unusable:
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
@@ -321,7 +331,7 @@ static bool fast_fp16_hardware_available(const int cc) {
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fp16_mma_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) ||
-        GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ||
+        GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 }
 
@@ -344,7 +354,7 @@ static bool amd_mfma_available(const int cc) {
 }
 
 static bool amd_wmma_available(const int cc) {
-    return (GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_RDNA3(cc));
+    return GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc) || GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
 static bool volta_mma_available(const int cc) {
@@ -711,7 +721,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 #if defined(GGML_USE_HIP)
 #if defined(CDNA) || defined(RDNA2) || defined(__gfx906__)
     c = __builtin_amdgcn_sdot4(a, b, c, false);
-#elif defined(RDNA3) || defined(RDNA4)
+#elif defined(RDNA3) || defined(RDNA4_M) || defined(RDNA4)
     c = __builtin_amdgcn_sudot4( true, a, true, b, c, false);
 #elif defined(RDNA1) || defined(__gfx900__)
     int tmp1;
@@ -756,9 +766,9 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float2 v
     acc += v.y*u.y;
 }
 
-#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4_M) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
 #define V_DOT2_F32_F16_AVAILABLE
-#endif // defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#endif // defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4_M) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
 
 static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v, const half2 u) {
 #ifdef V_DOT2_F32_F16_AVAILABLE
@@ -849,7 +859,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     // but CDNA3 supports only e4m3_fnuz (no inf). CDNA4 (gfx950) uses standard e4m3fn.
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
     const __hip_fp8_e4m3_fnuz xf = *reinterpret_cast<const __hip_fp8_e4m3_fnuz *>(&bits);
-    return static_cast<float>(xf) / 2;
+    return static_cast<float>(xf);
 #else
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= 900
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
@@ -922,6 +932,12 @@ static const uint3 init_fastdiv_values(uint64_t d_64) {
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {
         L++;
+        if (L == 32) {
+            // Shifting uint32_t by 32 to the right is undefined behavior.
+            // On NVIDIA it will produce 0.
+            // On AMD the value by which is shifted is masked with & 31 so it is shifting by 0 bits.
+            GGML_ABORT("undefined behavior in fastdiv");
+        }
     }
 
     uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
@@ -1032,6 +1048,34 @@ struct ggml_cuda_type_traits<GGML_TYPE_TQ4_1S> {
     static constexpr int qr = 1;              // QR_TQ4_1S
     static constexpr int qi = QK_TQ4_1S / 4;  // = QK/(4*QR): 8 int8-quads per block
 };
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ3_1S> {
+    static constexpr int qk = QK_TQ3_0;
+    static constexpr int qr = 1;              // QR_TQ3_1S
+    // Not the ggml QI convention (a TQ3_1S block holds 3 uint32 of qs): this is the
+    // loader's int8-quad count per block, as for TQ4_1S. Only the MMQ loader reads it.
+    static constexpr int qi = QK_TQ3_0 / 4;   // = QK/(4*QR): 8 int8-quads per block
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ3_4S> {
+    static constexpr int qk = QK_TQ3_4S;
+    static constexpr int qr = 1;
+    static constexpr int qi = QK_TQ3_4S / 4;  // 32 int8-quads per super-block
+};
+
+// TQ3_4S: the two half-block scales of 32-value sub-block `sub` (0..3) of a super-block, d*q/63. The
+// 8-byte header {d, sc} is read as one little-endian word, in which q[j] sits at bit 16 + 6j.
+// Super-blocks are 56 bytes and every row is a whole number of them, so the header is always
+// 8-byte aligned.
+static __device__ __forceinline__ float2 tq3_4s_sub_scales(const block_tq3_4s * __restrict__ sb, const int sub) {
+    const uint2    h = *(const uint2 *) sb;
+    const uint64_t w = ((uint64_t) h.y << 32) | h.x;
+    const float    d = __half2float(sb->d) * (1.0f / 63.0f);
+    const int     sh = 16 + 12*sub;
+    return make_float2(d * (float) ((w >> sh) & 63u), d * (float) ((w >> (sh + 6)) & 63u));
+}
 
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_MXFP4> {
@@ -1556,16 +1600,23 @@ struct ggml_backend_cuda_context {
 
     static const size_t max_cuda_graphs = 64;
 
-    int64_t last_graph_eviction_sweep = 0;
+    int64_t next_graph_eviction_time = 0;
+    int64_t last_graph_use_time = 0;
 
     ggml_cuda_graph * cuda_graph(uint64_t graph_key) {
         const int64_t time_now = ggml_time_us();
 
-        // sweep every 5s, evicting cuda graphs unused for >=10s
-        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
-            last_graph_eviction_sweep = time_now;
+        // Give all cached graphs 10s to be reused after an idle period, without updating each graph.
+        if (!cuda_graphs.empty() && time_now - last_graph_use_time >= 10'000'000) {
+            next_graph_eviction_time = time_now + 10'000'000;
+        }
+        last_graph_use_time = time_now;
+
+        // Sweep every 5s during active use, evicting graphs unused for at least 10s.
+        if (time_now >= next_graph_eviction_time) {
+            next_graph_eviction_time = time_now + 5'000'000;
             for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
-                if (time_now - it->second->last_used_time >= 10'000'000) {
+                if (it->first != graph_key && time_now - it->second->last_used_time >= 10'000'000) {
                     it = cuda_graphs.erase(it);
                 } else {
                     ++it;

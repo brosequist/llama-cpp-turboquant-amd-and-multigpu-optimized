@@ -1847,7 +1847,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             auto * mem_dft = llama_get_memory(ctx_dft);
 
-            static const bool mtp_prof = getenv("LLAMA_MTP_PROF") != nullptr;
+            static const bool mtp_prof = getenv("LLAMA_MTP_PROF") != nullptr && atoi(getenv("LLAMA_MTP_PROF")) != 0;
             const int64_t t_prof0 = mtp_prof ? ggml_time_us() : 0;
 
             bool ok = true;

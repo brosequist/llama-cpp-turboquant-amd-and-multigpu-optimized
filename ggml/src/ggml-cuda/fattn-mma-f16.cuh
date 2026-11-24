@@ -138,6 +138,9 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(640, 512, 32, 128, 2,  32, 160, 128,  64, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(640, 512, 64, 256, 1,  32, 160, 128,  64, 1, false);
 
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2, 32, 128, 128, 64, 1, false);
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2, 32, 128, 64, 128, 2, false);
+
     // TODO tune specifically for Volta
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
 }
@@ -1848,7 +1851,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     T_B_KQ    Q_B[(Q_in_reg ? DKQ/(2*T_B_KQ::J) : 1)];
 #if defined(TURING_MMA_AVAILABLE)
     T_C_VKQ VKQ_C[cols_per_warp == 8 ? DV/T_C_VKQ::I : DV/(2*T_C_VKQ::J)];
-#elif defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
+#elif defined(AMD_WMMA_256B_AVAILABLE)
     T_C_VKQ VKQ_C[DV % 32 != 0       ? DV/T_C_VKQ::J : DV/(2*T_C_VKQ::J)];
 #elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     T_C_VKQ VKQ_C[                                     DV/(2*T_C_VKQ::J)];

@@ -70,12 +70,12 @@ uint64_t ggml_graph_next_uid(void) {
 
 // Needed for ggml_fp32_to_bf16_row()
 #if defined(__AVX512BF16__)
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 #define m512i(p) p
 #else
 #include <immintrin.h>
 #define m512i(p) (__m512i)(p)
-#endif // defined(_MSC_VER)
+#endif // defined(_MSC_VER) && !defined(__clang__)
 #endif // defined(__AVX512BF16__)
 
 #if defined(__linux__) || \
@@ -472,27 +472,25 @@ void ggml_fp16_to_fp32_row(const ggml_fp16_t * x, float * y, int64_t n) {
 }
 
 void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
-    int i = 0;
-    for (; i < n; ++i) {
+    for (int64_t i = 0; i < n; i++) {
         y[i] = GGML_FP32_TO_FP16(x[i]);
     }
 }
 
 void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
-    int i = 0;
-    for (; i < n; ++i) {
+    for (int64_t i = 0; i < n; i++) {
         y[i] = GGML_BF16_TO_FP32(x[i]);
     }
 }
 
 void ggml_fp32_to_bf16_row_ref(const float * x, ggml_bf16_t * y, int64_t n) {
-    for (int i = 0; i < n; i++) {
+    for (int64_t i = 0; i < n; i++) {
         y[i] = ggml_compute_fp32_to_bf16(x[i]);
     }
 }
 
 void ggml_fp32_to_bf16_row(const float * x, ggml_bf16_t * y, int64_t n) {
-  int i = 0;
+    int64_t i = 0;
 #if defined(__AVX512BF16__)
   // subnormals are flushed to zero on this platform
   for (; i + 32 <= n; i += 32) {
@@ -840,6 +838,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_tq4_1s,
         .from_float_ref           = (ggml_from_float_t) quantize_row_tq4_1s_ref,
+    },
+    [GGML_TYPE_TQ3_4S] = {
+        .type_name                = "tq3_4s",
+        .blck_size                = QK_TQ3_4S,
+        .type_size                = sizeof(block_tq3_4s),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tq3_4s,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_tq3_4s_ref,
     },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
@@ -5323,10 +5329,10 @@ struct ggml_tensor * ggml_roll(
         int                   shift2,
         int                   shift3) {
     GGML_ASSERT(a->nb[0] == ggml_type_size(a->type));
-    GGML_ASSERT(abs(shift0) < a->ne[0]);
-    GGML_ASSERT(abs(shift1) < a->ne[1]);
-    GGML_ASSERT(abs(shift2) < a->ne[2]);
-    GGML_ASSERT(abs(shift3) < a->ne[3]);
+    GGML_ASSERT(shift0 > -a->ne[0] && shift0 < a->ne[0]);
+    GGML_ASSERT(shift1 > -a->ne[1] && shift1 < a->ne[1]);
+    GGML_ASSERT(shift2 > -a->ne[2] && shift2 < a->ne[2]);
+    GGML_ASSERT(shift3 > -a->ne[3] && shift3 < a->ne[3]);
 
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
@@ -8122,6 +8128,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBO5_0:   result = quantize_turbo5_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ3_1S:  result = quantize_tq3_1s(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ4_1S:  result = quantize_tq4_1s(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TQ3_4S:  result = quantize_tq3_4s(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

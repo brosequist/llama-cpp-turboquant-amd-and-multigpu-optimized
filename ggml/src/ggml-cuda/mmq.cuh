@@ -78,6 +78,8 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_Q2_K:
             return MMQ_Q8_1_DS_LAYOUT_D2S6;
         case GGML_TYPE_TQ4_1S:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_4S:
         case GGML_TYPE_Q3_K:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         case GGML_TYPE_Q4_K:
@@ -234,6 +236,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
         if (GGML_CUDA_CC_IS_RDNA4(cc)) {
             return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
         }
+        if (GGML_CUDA_CC_IS_RDNA4_M(cc)) {
+            return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
+        }
         if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
             return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
         }
@@ -257,6 +262,8 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
+#elif defined(RDNA4_M)
+    return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
 #elif defined(RDNA3_5)
     return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
 #elif defined(RDNA3)
@@ -397,6 +404,8 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_IQ2_XS:  return MMQ_DP4A_TXS_Q8_0_16;
         case GGML_TYPE_IQ2_S:   return MMQ_DP4A_TXS_Q8_0_16;
         case GGML_TYPE_TQ4_1S:  return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQ3_1S:  return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQ3_4S:  return MMQ_DP4A_TXS_Q8_0_16;
         case GGML_TYPE_IQ3_XXS: return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_S:   return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ1_S:   return MMQ_DP4A_TXS_Q8_0;
@@ -594,6 +603,18 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
                     ggml_cuda_mmq_load_tiles_tq4_1s<type, J, fallback>,
                     ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_dp4a<type, J, fallback>,
                     ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
+            case GGML_TYPE_TQ3_1S:
+                return ggml_cuda_mmq_util_funcs(
+                    VDR_Q3_K_Q8_1_MMQ,
+                    ggml_cuda_mmq_load_tiles_tq3_1s<type, J, fallback>,
+                    ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_dp4a<type, J, fallback>,
+                    ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
+            case GGML_TYPE_TQ3_4S:
+                return ggml_cuda_mmq_util_funcs(
+                    VDR_Q3_K_Q8_1_MMQ,
+                    ggml_cuda_mmq_load_tiles_tq3_4s<type, J, fallback>,
+                    ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_dp4a<type, J, fallback>,
+                    ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
             case GGML_TYPE_Q4_K:
                 return ggml_cuda_mmq_util_funcs(
                     VDR_Q4_K_Q8_1_MMQ,
@@ -756,6 +777,18 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
             return ggml_cuda_mmq_util_funcs(
                 -1,
                 ggml_cuda_mmq_load_tiles_tq4_1s<type, J, fallback>,
+                ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_mma<type, J, fallback>,
+                ggml_cuda_mmq_write_back_mma<type, J, fallback>);
+        case GGML_TYPE_TQ3_1S:
+            return ggml_cuda_mmq_util_funcs(
+                -1,
+                ggml_cuda_mmq_load_tiles_tq3_1s<type, J, fallback>,
+                ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_mma<type, J, fallback>,
+                ggml_cuda_mmq_write_back_mma<type, J, fallback>);
+        case GGML_TYPE_TQ3_4S:
+            return ggml_cuda_mmq_util_funcs(
+                -1,
+                ggml_cuda_mmq_load_tiles_tq3_4s<type, J, fallback>,
                 ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_mma<type, J, fallback>,
                 ggml_cuda_mmq_write_back_mma<type, J, fallback>);
         case GGML_TYPE_Q3_K:
@@ -1002,7 +1035,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
         int offset_y_scale;
         if constexpr (type == GGML_TYPE_NVFP4) {
             offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
@@ -1090,7 +1123,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
         int offset_y_scale;
         if constexpr (type == GGML_TYPE_NVFP4) {
             offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
@@ -1179,7 +1212,7 @@ static __global__ void mul_mat_q(
     int col_high   = ncols_dst;
     int col_diff   = ncols_dst;
     int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
-    int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+    int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
     int offset_y_scale;
     if constexpr (type == GGML_TYPE_NVFP4) {
         offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
@@ -1322,7 +1355,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int it = tmp2.x;
 
     if (!ids_dst) {
-        const int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst + it*I;
+        const int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst + it*I;
         dst += offset_dst;
 
         const int i_max = nrows_x   - it*I - 1;
@@ -1348,6 +1381,11 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int col_low  = expert_bounds[zt + 0];
     const int col_high = expert_bounds[zt + 1];
     const int col_diff = col_high - col_low;
+
+    // this tree tiles each expert as jt*J: an empty tile has no column left
+    if (col_diff - jt*J <= 0) {
+        return;
+    }
 
     for (int j = threadIdx.y*warp_size + threadIdx.x; j < J; j += nwarps*warp_size) {
         ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
@@ -1406,8 +1444,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const dim3 block_dims(warp_size, nwarps, 1);
 
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, false>), nbytes_shared);
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J,  true>), nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, fallback>), nbytes_shared);
 
     const int nty  = (args.nrows_x   + config.I - 1) / config.I;
     const int ntx  = (args.ncols_max + config.J - 1) / config.J;
@@ -1556,6 +1593,8 @@ extern DECL_MMQ_CASE(GGML_TYPE_Q5_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q5_1);
 extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
 extern DECL_MMQ_CASE(GGML_TYPE_TQ4_1S);
+extern DECL_MMQ_CASE(GGML_TYPE_TQ3_1S);
+extern DECL_MMQ_CASE(GGML_TYPE_TQ3_4S);
 // -----------------------------------------
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);

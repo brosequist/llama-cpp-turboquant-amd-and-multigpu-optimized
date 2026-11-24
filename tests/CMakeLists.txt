@@ -155,6 +155,7 @@ llama_build_and_test(test-gdn-ingredient-replay.cpp LABEL "turbo")
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-sampling.cpp)
+    llama_build_and_test(test-drama3-rope.cpp)
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
@@ -337,6 +338,8 @@ if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)
     llama_build_and_test(test-quantize-fns.cpp)
+    # the test reads the TQ3_1S block layout and the int8 centroid table from here
+    target_include_directories(test-quantize-fns PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-col2im-1d.cpp)
@@ -376,7 +379,6 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 # TurboQuant WHT round-trip test (links ggml turbo codec symbols via llama)
 llama_build_and_test(test-turbo-quant.c LABEL "turbo")
-llama_build_and_test(test-drama3-rope.cpp)
 
 if (NOT LLAMA_USE_SYSTEM_GGML)
     # Needs non-public ggml-impl.h

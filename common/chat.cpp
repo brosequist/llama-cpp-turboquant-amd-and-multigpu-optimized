@@ -3303,7 +3303,7 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     }
 
     // LFM2.5 format detection: template uses plain "List of tools: [...]" with no special tokens
-    if (src.find("List of tools: [") != std::string::npos &&
+    if (src.find("List of tools: ") != std::string::npos &&
         src.find("<|tool_list_start|>") == std::string::npos) {
         LOG_DBG("Using specialized template: LFM2.5\n");
         return common_chat_params_init_lfm2(tmpl, params, /* tool_list_tokens = */ false);

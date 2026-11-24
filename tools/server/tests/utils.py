@@ -112,6 +112,9 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
+    debug_proxy_allow_private: bool = False # test-only: lets the CORS proxy reach local servers
+    media_allow_private_urls: bool = False
+    allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
@@ -131,8 +134,17 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
+    def make_url(self, path: str, host: str | None = None) -> str:
+        if host is None:
+            host = self.server_host.split(",")[0].strip()
+            # a wildcard bind cannot be connected to on Windows
+            host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, host)
+        return f"http://{host}:{self.server_port}{path}"
+
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
         env = {**os.environ}
+        if self.debug_proxy_allow_private:
+            env["LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE"] = "1"
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
@@ -265,6 +277,10 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.media_allow_private_urls:
+            server_args.append("--media-allow-private-urls")
+        if self.allow_unauthenticated_tools:
+            server_args.append("--allow-unauthenticated-tools")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
         if self.mcp_servers_config:
@@ -697,6 +713,18 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     else:
         print(f"File already exists at {output_file}")
     return output_file
+
+
+def get_lan_ip() -> str | None:
+    # address of the interface that routes outside, no packet is sent
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            ip = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if ip.startswith("127.") else ip
 
 
 def is_slow_test_allowed():
