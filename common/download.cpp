@@ -455,7 +455,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
         }
         if (params.resolve_host) {
             // pin checked address, follow redirects manually to check each hop
-            cli.set_direct_hostname_addr_map({{parts.host, params.resolve_host(parts.host)}});
+            cli.set_hostname_addr_map({{parts.host, params.resolve_host(parts.host)}});
             cli.set_follow_location(false);
         }
 

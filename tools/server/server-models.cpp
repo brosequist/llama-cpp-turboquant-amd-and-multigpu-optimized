@@ -2079,7 +2079,7 @@ server_http_proxy::server_http_proxy(
     // setup Client
     if (!resolved_addr.empty()) {
         // pin the checked address; a redirect could lead to an unchecked one
-        cli->set_direct_hostname_addr_map({{host, resolved_addr}});
+        cli->set_hostname_addr_map({{host, resolved_addr}});
     }
     cli->set_follow_location(resolved_addr.empty());
     cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
